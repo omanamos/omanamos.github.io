@@ -8,7 +8,7 @@
         margin: 0;
       }
       .controls {
-        position: absolute;
+        position: fixed;
         top: 10px;
         right: 10px;
         display: flex;
@@ -39,12 +39,22 @@
         width: 300px;
         z-index: 2;
       }
+      .pagectl {
+        display: flex;
+      }
     </style>
   </head>
 
   <body>
     <div class="controls">
       <div>PDF: <input id="pdf-upload" type="file" /></div>
+      <span>Page: <span id="page_num"></span> / <span id="page_count"></span></span>
+      <div class="pagectl">
+        <button id="prev">Previous</button>
+        <button id="next">Next</button>
+      </div>
+      <button id="downloadPDF">Download PDF</button>
+      <br />
       <div>Image: <input id="img-upload" type="file" /></div>
       <button id="savePDF">Save PDF</button>
     </div>
@@ -63,6 +73,90 @@
     import 'https://cdn.interactjs.io/v1.9.20/modifiers/index.js'
     import 'https://cdn.interactjs.io/v1.9.20/dev-tools/index.js'
     import interact from 'https://cdn.interactjs.io/v1.9.20/interactjs/index.js';
+    var pdfjsLib = window['pdfjs-dist/build/pdf'];
+
+    var pdfDoc = null,
+      pageNum = 1,
+      pageRendering = false,
+      pageNumPending = null,
+      scale = 1.5,
+      canvas = document.getElementById('the-canvas'),
+      ctx = canvas.getContext('2d');
+
+    /**
+     * Get page info from document, resize canvas accordingly, and render page.
+     * @param num Page number.
+     */
+    function renderPage(num) {
+      pageRendering = true;
+      // Using promise to fetch the page
+      pdfDoc.getPage(num).then(function(page) {
+        var viewport = page.getViewport({scale: scale});
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+
+        // Render PDF page into canvas context
+        var renderContext = {
+          canvasContext: ctx,
+          viewport: viewport
+        };
+        var renderTask = page.render(renderContext);
+
+        // Wait for rendering to finish
+        renderTask.promise.then(function() {
+          pageRendering = false;
+          if (pageNumPending !== null) {
+            // New page rendering is pending
+            renderPage(pageNumPending);
+            pageNumPending = null;
+          }
+        });
+      });
+
+      // Update page counters
+      document.getElementById('page_num').textContent = num;
+    }
+
+    /**
+     * If another page rendering in progress, waits until the rendering is
+     * finised. Otherwise, executes rendering immediately.
+     */
+    function queueRenderPage(num) {
+      if (pageRendering) {
+        pageNumPending = num;
+      } else {
+        renderPage(num);
+      }
+    }
+
+    /**
+     * Displays previous page.
+     */
+    function onPrevPage() {
+      if (pageNum <= 1) {
+        return;
+      }
+      pageNum--;
+      queueRenderPage(pageNum);
+    }
+    document.getElementById('prev').addEventListener('click', onPrevPage);
+
+    /**
+     * Displays next page.
+     */
+    function onNextPage() {
+      if (pageNum >= pdfDoc.numPages) {
+        return;
+      }
+      pageNum++;
+      queueRenderPage(pageNum);
+    }
+    document.getElementById('next').addEventListener('click', onNextPage);
+
+
+    // ######################################
+    // Drag and Drop / Resize Logic for Image
+    // ######################################
 
     const position = { x: 0, y: 0 }
     interact('#image').draggable({
@@ -103,109 +197,103 @@
       }
     });
 
-    function showPDF(pdfData) {
-      var pdfjsLib = window['pdfjs-dist/build/pdf'];
-      var loadingTask = pdfjsLib.getDocument({data: pdfData});
-      loadingTask.promise.then(function(pdf) {
-        console.log('PDF loaded');
-        
-        // Fetch the first page
-        var pageNumber = 1;
-        pdf.getPage(pageNumber).then(function(page) {
-          console.log('Page loaded');
-          
-          var scale = 1.5;
-          var viewport = page.getViewport({scale: scale});
 
-          // Prepare canvas using PDF page dimensions
-          var canvas = document.getElementById('the-canvas');
-          var context = canvas.getContext('2d');
-          canvas.height = viewport.height;
-          canvas.width = viewport.width;
+    // ###############
+    // UPLOAD HANDLERS
+    // ###############
 
-          // Render PDF page into canvas context
-          var renderContext = {
-            canvasContext: context,
-            viewport: viewport
-          };
-          var renderTask = page.render(renderContext);
-          renderTask.promise.then(function () {
-            console.log('Page rendered');
-          });
-        });
-      }, function (reason) {
-        // PDF loading error
-        console.error(reason);
+
+    function clearImage() {
+      const img = document.getElementById("image");
+      img.style.display = 'none';
+      const inp = document.getElementById("img-upload");
+      inp.value = '';
+    }
+
+    function loadNewPDF(bytes, resetPage) {
+      pdfjsLib.getDocument({ data: bytes }).promise.then(function(pdf) {
+        pdfDoc = pdf;
+        if (resetPage) {
+          pageNum = 1;
+        }
+        document.getElementById('page_count').textContent = pdfDoc.numPages;
+        renderPage(pageNum);
       });
     }
 
-    var doc;
-
-    document.querySelector("#pdf-upload").addEventListener("change", function(e){
-    var file = e.target.files[0]
-    if(!file || file.type != "application/pdf"){
-      console.error(file.name, "is not a pdf file.")
-      return
-    }
-    
-    var fileReader = new FileReader();  
-
-    fileReader.onload = async function() {
-      var pdfbytes = new Uint8Array(this.result);
-      doc = await PDFLib.PDFDocument.load(pdfbytes);
-      var uri = await doc.saveAsBase64();
-      showPDF(pdfbytes);
-    };
-
-    fileReader.readAsArrayBuffer(file);
-  })
-
-  var imgData;
-  document.querySelector("#img-upload").addEventListener("change", function(e){
-    var file = e.target.files[0];
-    if(!file || file.type != "image/jpeg"){
-      console.error(file.name, "is not a jpeg file.")
-      return
-    }
-    
-    var fileReader = new FileReader();  
-    fileReader.onload = async function(evt) {
-      document.getElementById('image').src = evt.target.result;
-      imgData = evt.target.result;
-    };
-    fileReader.readAsDataURL(file);
-  });
-
-  document.getElementById('savePDF').addEventListener('click', saveNewPDF);
-
-  function downloadPDF(bytes) {
-    const url = window.URL || window.webkitURL;
-    const blob = new Blob([bytes], {type: "application/pdf"});
-    const a = document.createElement('a');
-    a.setAttribute('download', 'result.pdf');
-    a.setAttribute('href', url.createObjectURL(blob));
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }
-
-  async function saveNewPDF() {
-    const img = await doc.embedJpg(imgData);
-    const page = doc.getPage(0);
-    const canvas = document.getElementById("the-canvas");
-    const imgElement = document.getElementById("image");
-    const width = page.getWidth() * imgElement.width / canvas.width;
-    const height = page.getHeight() * imgElement.height / canvas.height;
-    const x = page.getWidth() * position.x / canvas.width;
-    const y = page.getHeight() - page.getHeight() * position.y / canvas.height - height;
-    page.drawImage(img, {
-      x,
-      y,
-      width,
-      height,
+    document.querySelector("#pdf-upload").addEventListener("change", function(e) {
+      var file = e.target.files[0]
+      if(!file || file.type != "application/pdf"){
+        console.error(file.name, "is not a pdf file.")
+        return
+      }
+      
+      var fileReader = new FileReader();  
+      fileReader.onload = async function() {
+        var pdfbytes = new Uint8Array(this.result);
+        loadNewPDF(pdfbytes, true);
+      };
+      fileReader.readAsArrayBuffer(file);
     })
-    var bytes = await doc.save();
-    downloadPDF(bytes);
-  }
+
+    var imgData;
+    document.querySelector("#img-upload").addEventListener("change", function(e){
+      var file = e.target.files[0];
+      if(!file || file.type != "image/jpeg"){
+        console.error(file.name, "is not a jpeg file.")
+        return
+      }
+      
+      var fileReader = new FileReader();  
+      fileReader.onload = async function(evt) {
+        const img = document.getElementById('image')
+        img.setAttribute('src', evt.target.result);
+        imgData = evt.target.result;
+        img.style.display = 'block';
+        
+      };
+      fileReader.readAsDataURL(file);
+    });
+
+    // ###############
+    // DOWNLOAD LOGIC
+    // ###############
+
+    async function downloadPDF() {
+      const bytes = await pdfDoc.saveDocument();
+      const url = window.URL || window.webkitURL;
+      const blob = new Blob([bytes], {type: "application/pdf"});
+      const a = document.createElement('a');
+      a.setAttribute('download', 'result.pdf');
+      a.setAttribute('href', url.createObjectURL(blob));
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+    document.getElementById('downloadPDF').addEventListener('click', downloadPDF);
+
+    async function saveNewPDF() {
+      const pdfBytes = await pdfDoc.saveDocument();
+      const doc = await PDFLib.PDFDocument.load(pdfBytes);
+      const img = await doc.embedJpg(imgData);
+      const page = doc.getPage(pageNum - 1);
+      const canvas = document.getElementById("the-canvas");
+      const imgElement = document.getElementById("image");
+
+      const width = page.getWidth() * imgElement.width / canvas.width;
+      const height = page.getHeight() * imgElement.height / canvas.height;
+      const x = page.getWidth() * position.x / canvas.width;
+      const y = page.getHeight() - page.getHeight() * position.y / canvas.height - height;
+      page.drawImage(img, {
+        x,
+        y,
+        width,
+        height,
+      })
+      var bytes = await doc.save();
+      clearImage();
+      loadNewPDF(bytes);
+    }
+    document.getElementById('savePDF').addEventListener('click', saveNewPDF);
   </script>
 </html>
