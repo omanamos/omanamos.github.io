@@ -1,0 +1,211 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <script src="https://unpkg.com/pdf-lib"></script>
+    <script src="//mozilla.github.io/pdf.js/build/pdf.js"></script>
+    <style>
+      body {
+        margin: 0;
+      }
+      .controls {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        display: flex;
+        flex-direction: column;
+        background: rgba(130, 130, 130, 0.2);
+        border-radius: 5px;
+        padding: 10px;
+        z-index: 3;
+      }
+      .controls > div {
+        margin: 5px;
+      }
+      .container {
+        position: absolute;
+        top: 0;
+        left: 0;
+      }
+      .container-canvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        z-index: 1;
+      }
+      #image {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 300px;
+        z-index: 2;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="controls">
+      <div>PDF: <input id="pdf-upload" type="file" /></div>
+      <div>Image: <input id="img-upload" type="file" /></div>
+      <button id="savePDF">Save PDF</button>
+    </div>
+    <div class="container">
+      <div class="container-canvas">
+        <canvas id="the-canvas"></canvas>
+        <img id="image" width="300" />
+      </div>
+    </div>
+  </body>
+
+  <script type="module">
+    import 'https://cdn.interactjs.io/v1.9.20/auto-start/index.js'
+    import 'https://cdn.interactjs.io/v1.9.20/actions/drag/index.js'
+    import 'https://cdn.interactjs.io/v1.9.20/actions/resize/index.js'
+    import 'https://cdn.interactjs.io/v1.9.20/modifiers/index.js'
+    import 'https://cdn.interactjs.io/v1.9.20/dev-tools/index.js'
+    import interact from 'https://cdn.interactjs.io/v1.9.20/interactjs/index.js';
+
+    const position = { x: 0, y: 0 }
+    interact('#image').draggable({
+      listeners: {
+        start (event) {
+          console.log(event.type, event.target)
+        },
+        move (event) {
+          position.x += event.dx
+          position.y += event.dy
+
+          event.target.style.transform =
+            `translate(${position.x}px, ${position.y}px)`
+        },
+      },
+      modifiers: [
+        interact.modifiers.restrict({
+          restriction: 'parent',
+          endOnly: true
+        })
+      ]
+    }).resizable({
+      edges: { top: true, left: true, bottom: true, right: true },
+      listeners: {
+        move: function (event) {
+          let { x, y } = event.target.dataset
+
+          x = (parseFloat(x) || 0) + event.deltaRect.left
+          y = (parseFloat(y) || 0) + event.deltaRect.top
+
+          Object.assign(event.target.style, {
+            width: `${event.rect.width}px`,
+            height: `${event.rect.height}px`,
+          })
+
+          Object.assign(event.target.dataset, { x, y })
+        }
+      }
+    });
+
+    function showPDF(pdfData) {
+      var pdfjsLib = window['pdfjs-dist/build/pdf'];
+      var loadingTask = pdfjsLib.getDocument({data: pdfData});
+      loadingTask.promise.then(function(pdf) {
+        console.log('PDF loaded');
+        
+        // Fetch the first page
+        var pageNumber = 1;
+        pdf.getPage(pageNumber).then(function(page) {
+          console.log('Page loaded');
+          
+          var scale = 1.5;
+          var viewport = page.getViewport({scale: scale});
+
+          // Prepare canvas using PDF page dimensions
+          var canvas = document.getElementById('the-canvas');
+          var context = canvas.getContext('2d');
+          canvas.height = viewport.height;
+          canvas.width = viewport.width;
+
+          // Render PDF page into canvas context
+          var renderContext = {
+            canvasContext: context,
+            viewport: viewport
+          };
+          var renderTask = page.render(renderContext);
+          renderTask.promise.then(function () {
+            console.log('Page rendered');
+          });
+        });
+      }, function (reason) {
+        // PDF loading error
+        console.error(reason);
+      });
+    }
+
+    var doc;
+
+    document.querySelector("#pdf-upload").addEventListener("change", function(e){
+    var file = e.target.files[0]
+    if(!file || file.type != "application/pdf"){
+      console.error(file.name, "is not a pdf file.")
+      return
+    }
+    
+    var fileReader = new FileReader();  
+
+    fileReader.onload = async function() {
+      var pdfbytes = new Uint8Array(this.result);
+      doc = await PDFLib.PDFDocument.load(pdfbytes);
+      var uri = await doc.saveAsBase64();
+      showPDF(pdfbytes);
+    };
+
+    fileReader.readAsArrayBuffer(file);
+  })
+
+  var imgData;
+  document.querySelector("#img-upload").addEventListener("change", function(e){
+    var file = e.target.files[0];
+    if(!file || file.type != "image/jpeg"){
+      console.error(file.name, "is not a jpeg file.")
+      return
+    }
+    
+    var fileReader = new FileReader();  
+    fileReader.onload = async function(evt) {
+      document.getElementById('image').src = evt.target.result;
+      imgData = evt.target.result;
+    };
+    fileReader.readAsDataURL(file);
+  });
+
+  document.getElementById('savePDF').addEventListener('click', saveNewPDF);
+
+  function downloadPDF(bytes) {
+    const url = window.URL || window.webkitURL;
+    const blob = new Blob([bytes], {type: "application/pdf"});
+    const a = document.createElement('a');
+    a.setAttribute('download', 'result.pdf');
+    a.setAttribute('href', url.createObjectURL(blob));
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  async function saveNewPDF() {
+    const img = await doc.embedJpg(imgData);
+    const page = doc.getPage(0);
+    const canvas = document.getElementById("the-canvas");
+    const imgElement = document.getElementById("image");
+    const width = page.getWidth() * imgElement.width / canvas.width;
+    const height = page.getHeight() * imgElement.height / canvas.height;
+    const x = page.getWidth() * position.x / canvas.width;
+    const y = page.getHeight() - page.getHeight() * position.y / canvas.height - height;
+    page.drawImage(img, {
+      x,
+      y,
+      width,
+      height,
+    })
+    var bytes = await doc.save();
+    downloadPDF(bytes);
+  }
+  </script>
+</html>
