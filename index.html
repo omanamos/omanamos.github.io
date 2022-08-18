@@ -42,21 +42,28 @@
       .pagectl {
         display: flex;
       }
+      #pdfctl {
+        display: none;
+      }
     </style>
   </head>
 
   <body>
     <div class="controls">
       <div>PDF: <input id="pdf-upload" type="file" /></div>
-      <span>Page: <span id="page_num"></span> / <span id="page_count"></span></span>
-      <div class="pagectl">
-        <button id="prev">Previous</button>
-        <button id="next">Next</button>
+      <div id="pdfctl">
+        <span>Page: <span id="page_num"></span> / <span id="page_count"></span></span>
+        <div class="pagectl">
+          <button id="prev">Previous</button>
+          <button id="next">Next</button>
+        </div>
+        <label>Pages to Download:</label><br />
+        <input id="pagefilter" type="text" pattern="([0-9]+|[0-9]+-[0-9]+)(,([0-9]+|[0-9]+-[0-9]+))*,*" placeholder="e.g. 1-2,5,7-10" /><br />
+        <button id="downloadPDF">Download PDF</button>
+        <hr />
+        <div>Image: <input id="img-upload" type="file" /></div>
+        <button id="savePDF">Save PDF</button>
       </div>
-      <button id="downloadPDF">Download PDF</button>
-      <br />
-      <div>Image: <input id="img-upload" type="file" /></div>
-      <button id="savePDF">Save PDF</button>
     </div>
     <div class="container">
       <div class="container-canvas">
@@ -232,6 +239,7 @@
       fileReader.onload = async function() {
         var pdfbytes = new Uint8Array(this.result);
         loadNewPDF(pdfbytes, true);
+        document.getElementById('pdfctl').style.display = 'block';
       };
       fileReader.readAsArrayBuffer(file);
     })
@@ -259,10 +267,50 @@
     // DOWNLOAD LOGIC
     // ###############
 
+    function getPages(max) {
+      const inp = document.getElementById('pagefilter');
+      const txt = inp.value;
+      if (inp.validity.patternMismatch) {
+        console.error('bad pattern', txt);
+      }
+      if (!txt) {
+        return;
+      }
+
+      const parts = txt.split(',')
+        .map((s) => s.trim())
+        .filter(s => s)
+        .map((s) => {
+          const range = s.split('-').map(n => Number(n));
+          if (range.length == 1) {
+            return range[0];
+          } else if (range[0] > range[1]) {
+            console.error('bad range', txt);
+          } else {
+            const startAt = range[0];
+            const size = range[1] - range[0] + 1;
+            return [...Array(size).keys()].map(i => i + startAt);
+          }
+        })
+        .flat()
+        .map(n => n - 1)
+        .filter(n => n < max);
+
+      return [...new Set(parts)];
+    }
+
+    document.getElementById('pagefilter').addEventListener('change', getPages)
+
     async function downloadPDF() {
-      const bytes = await pdfDoc.saveDocument();
+      const origBytes = await pdfDoc.saveDocument();
+      const origDoc = await PDFLib.PDFDocument.load(origBytes);
+      const newDoc = await PDFLib.PDFDocument.create();
+      const pages = getPages(origDoc.getPages().length);
+      const pdfPages = await newDoc.copyPages(origDoc, pages);
+      newDoc.addPage(pdfPages[0]);
+      const newBytes = await newDoc.save();
       const url = window.URL || window.webkitURL;
-      const blob = new Blob([bytes], {type: "application/pdf"});
+      const blob = new Blob([newBytes], {type: "application/pdf"});
       const a = document.createElement('a');
       a.setAttribute('download', 'result.pdf');
       a.setAttribute('href', url.createObjectURL(blob));
