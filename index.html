@@ -307,7 +307,7 @@
       const newDoc = await PDFLib.PDFDocument.create();
       const pages = getPages(origDoc.getPages().length);
       const pdfPages = await newDoc.copyPages(origDoc, pages);
-      newDoc.addPage(pdfPages[0]);
+      pdfPages.forEach(pg => newDoc.addPage(pg));
       const newBytes = await newDoc.save();
       const url = window.URL || window.webkitURL;
       const blob = new Blob([newBytes], {type: "application/pdf"});
